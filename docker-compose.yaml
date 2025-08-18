@@ -1,8 +1,9 @@
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.12
     container_name: ollama
     restart: unless-stopped
+    # （安全建議）如果只給 gateway 用，其實可以先拿掉對外 port，改用內網即可
     ports:
       - "11434:11434"
     volumes:
@@ -10,32 +11,16 @@ services:
     environment:
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_ORIGINS=http://localhost,https://localhost,http://localhost:*,https://localhost:*,http://127.0.0.1,https://127.0.0.1,http://127.0.0.1:*,https://127.0.0.1:*,http://140.127.196.78,https://140.127.196.78,http://140.127.196.78:*,https://140.127.196.78:*,http://220.134.55.99,https://220.134.55.99,http://220.134.55.99:*,https://220.134.55.99:*,http://35.194.233.225,https://35.194.233.225,http://35.194.233.225:*,https://35.194.233.225:*
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
-    extra_hosts:
-      - "registry.ollama.ai:172.67.182.229"
-    # GPU（未來需要時再開啟）
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
 
   models_init:
     image: curlimages/curl:8.11.1
-    profiles: ["init"]       # ← 新增這行
+    profiles: ["init"]
     depends_on:
       - ollama
     env_file:
@@ -44,31 +29,33 @@ services:
       - sh
       - -lc
       - |
-          set -e
-          sleep 5
-          MODEL="$${DEFAULT_MODEL:-llama3:instruct}"
-          echo "pulling $${MODEL}"
-          curl -fsS http://ollama:11434/api/pull \
-            -H "Content-Type: application/json" \
-            -d "{\"name\":\"$${MODEL}\"}"
+        set -e
+        echo "waiting for ollama..."
+        until curl -fsS http://ollama:11434/api/version >/dev/null; do sleep 1; done
+        MODEL="$${DEFAULT_MODEL:-qwen2:7b-instruct}"
+        echo "pulling $${MODEL}"
+        curl -fsS http://ollama:11434/api/pull \
+          -H "Content-Type: application/json" \
+          -d "{\"name\":\"$${MODEL}\"}"
     restart: "no"
 
   gateway:
-    image: python:3.12-slim
+    image: yillkid/ollama-gateway:1.0.1
     container_name: ollama-gateway-proxy
-    restart: unless-stopped
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
     env_file:
       - .env
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434   # ← 覆蓋成容器內能連到的服務名
-    working_dir: /app
-    volumes:
-      - ./gateway:/app
-    command: >
-      bash -lc "pip install -U pip &&
-                pip install -r requirements.txt &&
-                uvicorn main:app --host 0.0.0.0 --port 8082"
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_MODEL=qwen2:7b-instruct      #（可在 .env 覆蓋）
     ports:
       - "8082:8082"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8082/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
