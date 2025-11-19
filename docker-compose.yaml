@@ -40,7 +40,7 @@ services:
     restart: "no"
 
   gateway:
-    image: yillkid/ollama-gateway:1.0.1
+    image: yillkid/ollama-gateway:1.0.3
     container_name: ollama-gateway-proxy
     depends_on:
       ollama:
